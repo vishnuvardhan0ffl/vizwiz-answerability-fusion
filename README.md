@@ -9,6 +9,7 @@ Blind and low-vision people photograph objects and ask spoken questions about th
 ## Status
 
 - [x] Pilot analysis for the Assignment 2.1 proposal: [`notebooks/01_vizwiz_pilot.ipynb`](notebooks/01_vizwiz_pilot.ipynb)
+- [x] Shared training code for Project 2.2 (`src/`, `configs/`)
 - [ ] Full experiments, evaluation and bias analysis for Project 2.2
 
 ## Pilot results
@@ -47,13 +48,32 @@ VizWiz-VQA, released under a Creative Commons Attribution 4.0 International lice
 
 All settings are in the `CONFIG` cell; outputs go to `results/`, `figures/` and `features/` in that Drive folder.
 
+## Train the Project 2.2 models
+
+In Colab with a T4 GPU, open `notebooks/02_run_training.ipynb` and run all cells, or from the repo root:
+
+```
+python scripts/convert_pilot_cache.py                         # once: builds features/trainval
+python -m tests.test_smoke                                    # quick check (CPU, under a minute)
+python -m src.train --config configs/default.yaml --model all
+```
+
+Each model and seed writes to `MyDrive/vizwiz_fusion/runs/<model>/seed<k>/`. Formats are in [`docs/data_contract.md`](docs/data_contract.md).
+
 ## Repository structure
 
 ```
+configs/default.yaml              all settings and seeds for Project 2.2
+src/data.py                       loads feature parts and assigns train / dev / test
+src/models.py                     baselines, early fusion, cross-attention, gated fusion
+src/train.py                      shared training loop (python -m src.train)
+scripts/convert_pilot_cache.py    turns the pilot feature cache into features/trainval
+tests/test_smoke.py               end-to-end check on synthetic data
+docs/data_contract.md             feature, prediction and run-folder formats
 notebooks/
-    01_vizwiz_pilot.ipynb    data analysis, frozen features, 5 pilot models, GPU timing
-results/
-    figures/                 pilot figures
+    01_vizwiz_pilot.ipynb         pilot analysis (Assignment 2.1)
+    02_run_training.ipynb         Colab runner for the shared training loop
+results/figures/                  pilot figures
 requirements.txt
 README.md
 ```
