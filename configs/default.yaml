@@ -1,0 +1,39 @@
+# Project 2.2 settings. Every run reads this file, so results are reproducible from one place.
+# Change values here (or copy to a new file) instead of editing code.
+
+paths:
+  features_dir: /content/drive/MyDrive/vizwiz_fusion/features   # one sub-folder per part (see docs/data_contract.md)
+  runs_dir: /content/drive/MyDrive/vizwiz_fusion/runs           # one sub-folder per model and seed
+
+data:
+  parts: [trainval, test]   # trainval = official train + validation (from the pilot cache), test = official test
+  label: hard               # hard = answerable flag; soft = share of the 10 crowd answers saying "unanswerable"
+
+training:
+  seeds: [0, 1, 2]
+  epochs: 30
+  batch_size: 256
+  lr: 0.001
+  weight_decay: 0.01        # AdamW (Loshchilov & Hutter 2019)
+  patience: 4               # early stopping on dev AUPRC
+  train_probe_size: 5000    # train pairs scored in eval mode each epoch, for the train/dev loss curves
+
+models:
+  question_only:
+    hidden: 256
+    dropout: 0.3
+  image_only:
+    hidden: 256
+    dropout: 0.3
+  early:
+    hidden: 256
+    dropout: 0.3
+  cross_attention:
+    d_model: 256
+    heads: 4
+    layers: 1
+    dropout: 0.1
+  gated:
+    hidden: 256
+    dropout: 0.3
+    modality_dropout: 0.15  # share of training pairs with the question or the photo blanked
