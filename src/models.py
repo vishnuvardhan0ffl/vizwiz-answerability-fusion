@@ -1,12 +1,22 @@
 """All Project 2.2 models behind one interface.
 
 Every model is built as Model(d_q, d_v, **hyperparameters), declares the inputs it `needs`, and maps a
-batch dict to one logit per pair (positive class = unanswerable). Late fusion has no trainable weights,
-so it lives in train.py and combines the saved unimodal predictions.
+batch dict to one logit per pair (positive class = unanswerable). Vector models take `features`:
+"vit_bert" (ViT [CLS] + BERT mean, the default) or "clip" (CLIP image + text embeddings). Config entries
+can reuse a class under a new name with `base`, e.g. clip_early = early fusion on CLIP features.
+Late fusion has no trainable weights, so it lives in train.py and combines saved unimodal predictions.
 Fusion levels follow the early / late / intermediate taxonomy of Baltrusaitis, Ahuja & Morency (2019).
 """
 import torch
 import torch.nn as nn
+
+VECTOR_KEYS = {"vit_bert": ("q_vec", "v_vec"), "clip": ("q_clip", "v_clip")}
+
+
+def vector_keys(features):
+    if features not in VECTOR_KEYS:
+        raise ValueError(f"features must be one of {sorted(VECTOR_KEYS)}, got '{features}'")
+    return VECTOR_KEYS[features]
 
 
 class MLPHead(nn.Module):
@@ -23,38 +33,41 @@ class MLPHead(nn.Module):
 
 class QuestionOnly(nn.Module):
     """Baseline: question embedding only (measures language priors)."""
-    needs = ("q_vec",)
 
-    def __init__(self, d_q, d_v, hidden=256, dropout=0.3):
+    def __init__(self, d_q, d_v, hidden=256, dropout=0.3, features="vit_bert"):
         super().__init__()
+        self.key = vector_keys(features)[0]
+        self.needs = (self.key,)
         self.head = MLPHead(d_q, hidden, dropout)
 
     def forward(self, b):
-        return self.head(b["q_vec"])
+        return self.head(b[self.key])
 
 
 class ImageOnly(nn.Module):
     """Baseline: image embedding only (measures photo-quality cues)."""
-    needs = ("v_vec",)
 
-    def __init__(self, d_q, d_v, hidden=256, dropout=0.3):
+    def __init__(self, d_q, d_v, hidden=256, dropout=0.3, features="vit_bert"):
         super().__init__()
+        self.key = vector_keys(features)[1]
+        self.needs = (self.key,)
         self.head = MLPHead(d_v, hidden, dropout)
 
     def forward(self, b):
-        return self.head(b["v_vec"])
+        return self.head(b[self.key])
 
 
 class EarlyFusion(nn.Module):
     """Concatenate question and image embeddings, then one MLP."""
-    needs = ("q_vec", "v_vec")
 
-    def __init__(self, d_q, d_v, hidden=256, dropout=0.3):
+    def __init__(self, d_q, d_v, hidden=256, dropout=0.3, features="vit_bert"):
         super().__init__()
+        self.needs = vector_keys(features)
         self.head = MLPHead(d_q + d_v, hidden, dropout)
 
     def forward(self, b):
-        return self.head(torch.cat([b["q_vec"], b["v_vec"]], -1))
+        q, v = (b[k] for k in self.needs)
+        return self.head(torch.cat([q, v], -1))
 
 
 class CrossAttentionBlock(nn.Module):
@@ -100,10 +113,9 @@ class GatedFusion(nn.Module):
     pairs so the gate learns to cope when one input is unreliable. The mean gate value per pair is kept
     in `last_gate_q` for analysis (higher = more weight on the question).
     """
-    needs = ("q_vec", "v_vec")
-
-    def __init__(self, d_q, d_v, hidden=256, dropout=0.3, modality_dropout=0.15):
+    def __init__(self, d_q, d_v, hidden=256, dropout=0.3, modality_dropout=0.15, features="vit_bert"):
         super().__init__()
+        self.needs = vector_keys(features)
         self.h_q, self.h_v = nn.Linear(d_q, hidden), nn.Linear(d_v, hidden)
         self.gate = nn.Linear(d_q + d_v, hidden)
         self.head = MLPHead(hidden, hidden, dropout)
@@ -111,7 +123,7 @@ class GatedFusion(nn.Module):
         self.last_gate_q = None
 
     def forward(self, b):
-        x_q, x_v = b["q_vec"], b["v_vec"]
+        x_q, x_v = (b[k] for k in self.needs)
         if self.training and self.p > 0:
             u = torch.rand(len(x_q), 1, device=x_q.device)
             x_q = x_q * (u >= self.p / 2)                       # first half of the dropped share: no question
@@ -131,7 +143,20 @@ MODELS = {
 }
 
 
-def build_model(name, d_q, d_v, **hparams):
-    if name not in MODELS:
-        raise ValueError(f"unknown model '{name}'; choose from {sorted(MODELS)} (late fusion: see train.py)")
-    return MODELS[name](d_q, d_v, **hparams)
+def build_model(name, dims, **hparams):
+    """Build a model from its config entry. `base` picks the class (default: the name itself);
+    `features` picks the input vectors, and with it the input sizes from `dims`."""
+    hp = dict(hparams)
+    base = hp.pop("base", name)
+    if base not in MODELS:
+        raise ValueError(f"unknown model '{base}'; choose from {sorted(MODELS)} (late fusion: see train.py)")
+    features = hp.get("features", "vit_bert")
+    if features == "clip":
+        if "d_q_clip" not in dims:
+            raise ValueError(f"'{name}' needs CLIP features, but the hand-off has no clip_txt / clip_img arrays")
+        d_q, d_v = dims["d_q_clip"], dims["d_v_clip"]
+    else:
+        d_q, d_v = dims["d_q"], dims["d_v"]
+    if base == "cross_attention" and features != "vit_bert":
+        raise ValueError("cross_attention needs token features; only vit_bert has them")
+    return MODELS[base](d_q, d_v, **hp)

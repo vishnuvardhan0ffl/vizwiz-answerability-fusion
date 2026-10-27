@@ -50,28 +50,27 @@ All settings are in the `CONFIG` cell; outputs go to `results/`, `figures/` and 
 
 ## Train the Project 2.2 models
 
-In Colab with a T4 GPU, open `notebooks/02_run_training.ipynb` and run all cells, or from the repo root:
+The data and baseline notebook (`notebooks/02_data_and_baselines.ipynb`) writes the features once. Then, in Colab with a T4 GPU, open `notebooks/02_run_training.ipynb` and run all cells, or from the repo root:
 
 ```
-python scripts/convert_pilot_cache.py                         # once: builds features/trainval
-python -m tests.test_smoke                                    # quick check (CPU, under a minute)
-python -m src.train --config configs/default.yaml --model all
+python -m tests.test_smoke                                    # quick check (CPU, about a minute)
+python -m src.train --config configs/default.yaml --model all --skip-existing --cache-dir /content/features_local
 ```
 
-Each model and seed writes to `MyDrive/vizwiz_fusion/runs/<model>/seed<k>/`. Formats are in [`docs/data_contract.md`](docs/data_contract.md).
+Each model and seed writes to `MyDrive/vizwiz_fusion/runs/<model>/seed<k>/`. Formats and model names are in [`docs/data_contract.md`](docs/data_contract.md).
 
 ## Repository structure
 
 ```
 configs/default.yaml              all settings and seeds for Project 2.2
-src/data.py                       loads feature parts and assigns train / dev / test
-src/models.py                     baselines, early fusion, cross-attention, gated fusion
+src/data.py                       loads the feature hand-off and assigns train / dev / test
+src/models.py                     baselines, early fusion, cross-attention, gated fusion (ViT/BERT or CLIP)
 src/train.py                      shared training loop (python -m src.train)
-scripts/convert_pilot_cache.py    turns the pilot feature cache into features/trainval
 tests/test_smoke.py               end-to-end check on synthetic data
 docs/data_contract.md             feature, prediction and run-folder formats
 notebooks/
     01_vizwiz_pilot.ipynb         pilot analysis (Assignment 2.1)
+    02_data_and_baselines.ipynb   features for all splits, baselines, floor models (Sanjai)
     02_run_training.ipynb         Colab runner for the shared training loop
 results/figures/                  pilot figures
 requirements.txt

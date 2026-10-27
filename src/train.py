@@ -1,8 +1,9 @@
 """Shared training loop for every Project 2.2 model.
 
 Usage (from the repo root, e.g. in Colab):
-    python -m src.train --config configs/default.yaml --model all
-    python -m src.train --config configs/default.yaml --model gated --seeds 0
+    python -m src.train --config configs/default.yaml --model all --skip-existing
+    python -m src.train --config configs/default.yaml --model gated_clip --seeds 0
+    add --cache-dir /content/features_local in Colab to copy features off Drive first (faster)
 
 Each run writes to <runs_dir>/<model>/seed<k>/:
     model.pt          best weights (selected on dev AUPRC)
@@ -28,7 +29,7 @@ from sklearn.metrics import average_precision_score
 from src.data import load_features
 from src.models import build_model
 
-TRAINABLE = ["question_only", "image_only", "early", "cross_attention", "gated"]
+TRAINABLE = ["question_only", "image_only", "early", "clip_early", "cross_attention", "gated", "gated_clip"]
 
 
 def load_config(path):
@@ -71,8 +72,11 @@ def predict(model, store, idx, device, bs=1024):
 def train_one(store, cfg, model_name, seed, device):
     """Train one model with one seed; early-stop on dev AUPRC; save everything needed downstream."""
     set_seed(seed)
-    tcfg, hp = cfg["training"], cfg["models"].get(model_name, {})
-    model = build_model(model_name, **store.dims, **hp).to(device)
+    tcfg = cfg["training"]
+    if model_name not in cfg["models"]:
+        raise ValueError(f"'{model_name}' has no entry under models: in the config")
+    hp = cfg["models"][model_name]
+    model = build_model(model_name, store.dims, **hp).to(device)
     tr, dev, test = store.index("train"), store.index("dev"), store.index("test")
     target = torch.from_numpy(store.meta["target"].values.astype(np.float32))
     y = store.meta["y"].values
@@ -119,8 +123,9 @@ def train_one(store, cfg, model_name, seed, device):
         if len(idx) == 0:
             continue
         p, gate = predict(model, store, idx, device)
+        y_split = y[idx] if np.isnan(y[idx]).any() else y[idx].astype(int)  # unlabelled rows stay empty
         f = pd.DataFrame({"pair_id": store.meta["pair_id"].values[idx], "split": split, "model": model_name,
-                          "seed": seed, "y": y[idx].astype(int), "p_unanswerable": p})
+                          "seed": seed, "y": y_split, "p_unanswerable": p})
         if gate is not None:
             f["gate_q"] = gate
         frames.append(f)
@@ -132,6 +137,12 @@ def train_one(store, cfg, model_name, seed, device):
                "peak_vram_gb": round(torch.cuda.max_memory_allocated() / 1e9, 3) if device == "cuda" else None}
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
     return out
+
+
+def finished(cfg, model_name, seed):
+    """True if this model and seed already have dev and test predictions."""
+    f = Path(cfg["paths"]["runs_dir"]) / model_name / f"seed{seed}" / "predictions.csv"
+    return f.exists() and {"dev", "test"} <= set(pd.read_csv(f, usecols=["split"])["split"])
 
 
 def late_fusion(cfg, seed):
@@ -158,7 +169,9 @@ def main(argv=None):
     ap.add_argument("--config", default="configs/default.yaml")
     ap.add_argument("--model", default="all", help="one of %s, late, or all" % ", ".join(TRAINABLE))
     ap.add_argument("--seeds", type=int, nargs="*", help="override the seeds in the config")
-    ap.add_argument("--parts", nargs="*", help="override data.parts, e.g. --parts trainval before the test part exists")
+    ap.add_argument("--parts", nargs="*", help="override data.parts (only for the older per-part layout)")
+    ap.add_argument("--skip-existing", action="store_true", help="skip model/seed runs that already have predictions")
+    ap.add_argument("--cache-dir", help="copy feature files here before loading (e.g. /content/features_local)")
     args = ap.parse_args(argv)
 
     cfg = load_config(args.config)
@@ -166,15 +179,24 @@ def main(argv=None):
         cfg["data"]["parts"] = args.parts
     seeds = args.seeds if args.seeds else cfg["training"]["seeds"]
     names = TRAINABLE + ["late"] if args.model == "all" else [args.model]
+    unknown = [n for n in names if n != "late" and n not in cfg["models"]]
+    if unknown:
+        raise SystemExit(f"no config entry under models: for {unknown}")
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    data = cfg["data"]
+    cache_dir = args.cache_dir or cfg["paths"].get("local_cache_dir")
     store = None
     for seed in seeds:
         for name in names:
+            if args.skip_existing and finished(cfg, name, seed):
+                print(f"[{name} seed {seed}] already has predictions, skipped")
+                continue
             if name == "late":
                 late_fusion(cfg, seed)
                 continue
             if store is None:
-                store = load_features(cfg["paths"]["features_dir"], cfg["data"]["parts"], cfg["data"]["label"])
+                store = load_features(cfg["paths"]["features_dir"], data.get("parts"), data["label"],
+                                      data.get("soft_label_weight", 1.0), cache_dir)
                 print({s: int(len(store.index(s))) for s in ("train", "dev", "test")}, "pairs | device:", device)
             train_one(store, cfg, name, seed, device)
 
