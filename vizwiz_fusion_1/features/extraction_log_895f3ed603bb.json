@@ -1,0 +1,20 @@
+{
+  "image_extraction": {
+    "n": 32842,
+    "minutes": 6.0,
+    "images_per_sec": 90.8,
+    "peak_vram_gb": 0.94,
+    "unreadable_images": 0
+  },
+  "text_extraction": {
+    "n": 32842,
+    "minutes": 0.4,
+    "peak_vram_gb": 0.78,
+    "truncated_share": 0.0091
+  },
+  "clip_extraction": {
+    "n": 32842,
+    "minutes": 5.9,
+    "peak_vram_gb": 0.95
+  }
+}
